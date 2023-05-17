@@ -211,10 +211,12 @@
     (loop for word = (next-word)
           until (or (at-end)
                     (string= word "}"))
-          do (push (make-word :name word) *locals*)
-          finally (nappend (word-code (first *dictionary*))
-                           (loop for word in *locals*
-                                 collect `(push (make-word :name ,(word-name word) :code `((vector-push ,(vector-pop *stack*) *stack*))) *locals*))))))
+          do (push (make-word :name word) *locals*))
+    (nappend (word-code (first *dictionary*))
+             (loop for word in *locals*
+                   collect `(push (make-word :name ,(word-name word)
+                                             :code `((vector-push ,(vector-pop *stack*) *stack*)))
+                                  *locals*)))))
 
 (defword "see" ()
   (format t "~a" (lookup-word (next-word))))
