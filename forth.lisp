@@ -17,12 +17,13 @@
 
 (defparameter *scanner* (make-scanner))
 (defparameter *dictionary* nil)
+(defparameter *locals* nil)
 (defparameter *stack* (make-array 0 :element-type 'number :adjustable t :fill-pointer 0))
 (defparameter *memory* (make-array 0 :element-type 'number :adjustable t :fill-pointer 0))
 (defparameter *compile-mode-p* nil)
 
 (defun lookup-word (word)
-  (find word *dictionary* :key #'word-name :test #'string=))
+  (find word (append *locals* *dictionary*) :key #'word-name :test #'string=))
 
 (defmacro if-let ((var val) then &optional else)
   `(let ((,var ,val))
@@ -40,6 +41,9 @@
 
 (defmacro from-top (vector &optional (amount 0))
   `(aref ,vector (- (fill-pointer *stack*) 1 ,amount)))
+
+(defmacro nappend (target &rest lists)
+  `(setf ,target (append ,target ,@lists)))
 
 (defun vector-clear (vector)
   (loop repeat (fill-pointer vector)
@@ -78,7 +82,7 @@
 
 (defun identify-word (word)
   (if-let (entry (lookup-word word))
-    (with-slots (enabledp code) (lookup-word word)
+    (with-slots (enabledp code) entry
       (if enabledp
           entry
           (error "Cannot use '~a' while compiling it" word)))
@@ -119,7 +123,8 @@
                         current 0)
                   (interprete)
                   (format t "~t~a~%" *stack*)))
-    (setf *compile-mode-p* nil)
+    (setf *compile-mode-p* nil
+          *locals* nil)
     (vector-clear *stack*)
     (vector-clear *memory*)))
 
@@ -201,6 +206,16 @@
           do (incf current)
           finally (setf start (incf current)))))
 
+(defword "{" (:immediatep t)
+  (with-scanner
+    (loop for word = (next-word)
+          until (or (at-end)
+                    (string= word "}"))
+          do (push (make-word :name word) *locals*)
+          finally (nappend (word-code (first *dictionary*))
+                           (loop for word in *locals*
+                                 collect `(push (make-word :name ,(word-name word) :code `((vector-push ,(vector-pop *stack*) *stack*))) *locals*))))))
+
 (defword "see" ()
   (format t "~a" (lookup-word (next-word))))
 
@@ -211,8 +226,10 @@
     (error "Cannot make a word with no name")))
 
 (defword ";" (:immediatep t)
+  (nappend (word-code (first *dictionary*)) '((setf *locals* nil)))
   (setf *compile-mode-p* nil
-        (word-enabledp (first *dictionary*)) t))
+        (word-enabledp (first *dictionary*)) t
+        *locals* nil))
 
 (defword "variable" ()
   (if-let (name (next-word))
