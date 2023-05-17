@@ -31,7 +31,9 @@
 
 (defmacro defword (name (&key (immediatep nil) (enabledp t)) &body body)
   `(if-let (entry (lookup-word ,name))
-     (progn (setf (word-code entry) ',body)
+     (progn (setf (word-code entry) ',body
+                  (word-enabledp entry) ',enabledp
+                  (word-immediatep entry) ',immediatep)
             (format t "WARNING: REDEFINING '~a'" ',name))
      (push (make-word :name ',name :immediatep ,immediatep :enabledp ,enabledp :code ',body) *dictionary*)))
 
