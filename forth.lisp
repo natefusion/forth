@@ -17,13 +17,12 @@
 
 (defparameter *scanner* (make-scanner))
 (defparameter *dictionary* nil)
-(defparameter *locals* nil)
 (defparameter *stack* (make-array 0 :element-type 'number :adjustable t :fill-pointer 0))
 (defparameter *memory* (make-array 0 :element-type 'number :adjustable t :fill-pointer 0))
-(defparameter *compile-mode-p* nil)
+(defparameter *word-being-compiled* nil)
 
 (defun lookup-word (word)
-  (find word (append *locals* *dictionary*) :key #'word-name :test #'string=))
+  (find word *dictionary* :key #'word-name :test #'string=))
 
 (defmacro if-let ((var val) then &optional else)
   `(let ((,var ,val))
@@ -32,10 +31,19 @@
 (defmacro defword (name (&key (immediatep nil) (enabledp t)) &body body)
   `(if-let (entry (lookup-word ,name))
      (progn (setf (word-code entry) ',body
-                  (word-enabledp entry) ',enabledp
-                  (word-immediatep entry) ',immediatep)
+                  (word-enabledp entry) ,enabledp
+                  (word-immediatep entry) ,immediatep)
             (format t "WARNING: REDEFINING '~a'~%" ',name))
-     (push (make-word :name ',name :immediatep ,immediatep :enabledp ,enabledp :code ',body) *dictionary*)))
+     (push (make-word :name ,name :immediatep ,immediatep :enabledp ,enabledp :code ',body) *dictionary*)))
+
+(defmacro defword-forth (&body body)
+  `(let ((*scanner* (make-scanner)))
+     (with-scanner
+       (dolist (line ',body)
+         (setf source line
+               start 0
+               current 0)
+         (interprete)))))
 
 (defmacro with-scanner (&body body)
   `(with-slots (source start current) *scanner*
@@ -84,10 +92,9 @@
 
 (defun identify-word (word)
   (if-let (entry (lookup-word word))
-    (with-slots (enabledp code) entry
-      (if enabledp
-          entry
-          (error "Cannot use '~a' while compiling it" word)))
+    (if (equal (word-name entry) *word-being-compiled*)
+        (error "Cannot use '~a' while compiling it" word)
+        entry)
     (if (every #'digit-char-p word)
         (make-word :name "" :code `((vector-push-extend ,(read-from-string word) *stack*)))
         nil)))
@@ -96,32 +103,29 @@
   (eval `(progn ,@code)))
 
 (defun compile-word (entry)
-  ;; the compile body shall always be at the top of the dictionary
-  (setf (word-code (first *dictionary*))
-        (append (word-code (first *dictionary*))
-                (with-slots (name code) entry
-                  ;; empty name implies this is a number
-                  (if (string= name "")
-                      code
-                      `((execute-word (word-code (lookup-word ,name)))))))))
+  (nappend (word-code (lookup-word *word-being-compiled*))
+           (with-slots (name code) entry
+             ;; empty name implies this is a number
+             (if (string= name "")
+                 code
+                 `((execute-word (word-code (lookup-word ,name))))))))
 
 (defun interprete ()
   (loop for word = (next-word)
         while word
         do (if-let (entry (identify-word word))
              (with-slots (immediatep code) entry
-               (if (and *compile-mode-p* (not immediatep))
+               (if (and *word-being-compiled* (not immediatep))
                    (compile-word entry)
                    (execute-word code)))
              (error "Cannot find '~a' in dictionary" word))))
 
 (defun forth-repl ()
-  (let ((*scanner* (make-scanner))
+  (let ((*scanner* *scanner*)
         (*dictionary* *dictionary*)
-        (*locals* nil)
-        (*stack* (make-array 0 :element-type 'number :adjustable t :fill-pointer 0))
-        (*memory* (make-array 0 :element-type 'number :adjustable t :fill-pointer 0))
-        (*compile-mode-p* nil))
+        (*stack* *stack*)
+        (*memory* *memory*)
+        (*word-being-compiled* *word-being-compiled*))
     (loop for line = (read-line)
           until (string= line "bye")
           do (with-scanner
@@ -295,32 +299,18 @@
           do (incf current)
           finally (setf start (incf current)))))
 
-(defword "{" (:immediatep t)
-  (with-scanner
-    (loop for word = (next-word)
-          until (or (at-end)
-                    (string= word "}"))
-          do (push (make-word :name word) *locals*))
-    (nappend (word-code (first *dictionary*))
-             (loop for word in *locals*
-                   collect `(push (make-word :name ,(word-name word)
-                                             :code `((vector-push ,(vector-pop *stack*) *stack*)))
-                                  *locals*)))))
-
 (defword "see" ()
   (format t "~a" (lookup-word (next-word))))
 
 (defword ":" (:immediatep t)
-  (setf *compile-mode-p* t)
   (if-let (name (next-word))
-    (eval `(defword ,name (:enabledp nil)))
+    (progn (setf *word-being-compiled* name)
+           (eval `(defword ,name (:enabledp nil))))
     (error "Cannot make a word with no name")))
 
 (defword ";" (:immediatep t)
-  (nappend (word-code (first *dictionary*)) '((setf *locals* nil)))
-  (setf *compile-mode-p* nil
-        (word-enabledp (first *dictionary*)) t
-        *locals* nil))
+  (setf *word-being-compiled* nil
+        (word-enabledp (first *dictionary*)) t))
 
 (defword "variable" ()
   (if-let (name (next-word))
@@ -341,5 +331,21 @@
 (defword "-!" ()
   (decf (aref *memory* (vector-pop *stack*)) (vector-pop *stack*)))
 
+(defword "here" ()
+    (vector-push-extend (fill-pointer *memory*) *stack*))
+
+(defword "," ()
+  (vector-push-extend (vector-pop *stack*) *memory*))
+
+(defword "allot" ()
+  (let ((new-size (+ (fill-pointer *memory*) (vector-pop *stack*))))
+    (adjust-array *memory* new-size)
+    (setf (fill-pointer *memory*) new-size)))
+
+(defword "cell+" ()
+  (incf (from-top *stack*)))
+
 (defword "immediate" ()
   (setf (word-immediatep (first *dictionary*)) t))
+
+(defword-forth ": cells 1 * ;")
