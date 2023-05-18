@@ -121,11 +121,11 @@
              (error "Cannot find '~a' in dictionary" word))))
 
 (defun forth-repl ()
-  (let ((*scanner* *scanner*)
+  (let ((*scanner* (make-scanner))
         (*dictionary* *dictionary*)
-        (*stack* *stack*)
-        (*memory* *memory*)
-        (*word-being-compiled* *word-being-compiled*))
+        (*stack* (make-array 0 :element-type 'number :adjustable t :fill-pointer 0))
+        (*memory* (make-array 0 :element-type 'number :adjustable t :fill-pointer 0))
+        (*word-being-compiled* nil))
     (loop for line = (read-line)
           until (string= line "bye")
           do (with-scanner
